@@ -1,1 +1,1 @@
-# ia-generativa-sistemas-multiagente
+# Inteligencia artificial generativa avanzada y sistemas multi agente
