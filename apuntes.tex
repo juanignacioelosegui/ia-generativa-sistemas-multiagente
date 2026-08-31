@@ -1,0 +1,551 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{titlesec}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, urlcolor=blue!60!black}
+
+\titleformat{\section}{\Large\bfseries}{Clase \thesection:}{0.5em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.5em}{}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue!70!black},
+  commentstyle=\color{green!50!black},
+  stringstyle=\color{red!60!black},
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!5},
+}
+
+\title{\textbf{Inteligencia Artificial Generativa Avanzada\\y Sistemas Multi-Agente}\\[0.5em]
+\large Apuntes de clase --- UTDT\\
+Prof.\ Francisco Traversaro}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{De vectores a un LLM --- Fundamentos matemáticos}
+%=============================================================================
+
+\subsection{El camino hacia un LLM}
+
+Todo LLM se apoya en una cadena de bloques fundamentales:
+
+\begin{center}
+\textbf{Vectores/embeddings} $\to$ \textbf{Red neuronal} $\to$ \textbf{Atenci\'on} $\to$ \textbf{Transformer} $\to$ \textbf{LLM}
+\end{center}
+
+Los s\'imbolos clave de la clase: $\mathbb{R}^n$ (espacios vectoriales), $\mathbf{w}^\top \mathbf{x}$ (producto interno), $W\mathbf{x}+\mathbf{b}$ (capa af\'in), $\phi$ (activaci\'on), $L(\theta)$ (p\'erdida), $\nabla L$ (gradiente), AD (diferenciaci\'on autom\'atica).
+
+\subsection{Vectores, producto interno y embeddings}
+
+\begin{itemize}
+  \item Un vector $\mathbf{x} = (x_1, \ldots, x_n) \in \mathbb{R}^n$ tiene dos lecturas: $n$-tupla de coordenadas (\'algebra) y punto/direcci\'on con norma (geometr\'ia).
+  \item En deep learning, todo dato (token, imagen) se codifica como vector en dimensi\'on alta: \textbf{representaci\'on distribuida}.
+  \item \textbf{Embeddings}: vectores aprendidos por palabra. La geometr\'ia del espacio captura significado:
+  \[
+    \text{vec}(\text{rey}) - \text{vec}(\text{hombre}) + \text{vec}(\text{mujer}) \approx \text{vec}(\text{reina})
+  \]
+  \item \textbf{Producto interno}: $\mathbf{w}^\top \mathbf{x} = \sum_i w_i x_i = \|\mathbf{w}\| \|\mathbf{x}\| \cos\theta$. Mide alineaci\'on/proyecci\'on entre vectores. Base de la \textbf{similitud coseno}.
+  \item En atenci\'on, el peso de un token sobre otro es el producto interno de sus vectores query y key (escalado por $\sqrt{d}$, normalizado con softmax).
+\end{itemize}
+
+\subsection{Aplicaciones lineales y matrices}
+
+\begin{itemize}
+  \item $W \in \mathbb{R}^{m \times n}$ representa $\mathbb{R}^n \to \mathbb{R}^m$. Cada componente de la salida es un producto interno de una fila con la entrada.
+  \item Una \textbf{capa lineal} son $m$ productos internos en paralelo.
+  \item Componer capas lineales = multiplicar matrices. El producto matriz--matriz domina el costo del entrenamiento $\Rightarrow$ hardware paralelo (GPU).
+  \item \textbf{SVD} ($W = U\Sigma V^\top$): toda aplicaci\'on lineal es rotaci\'on $\cdot$ escala $\cdot$ rotaci\'on. Relevante para LoRA y atenci\'on de rango bajo.
+\end{itemize}
+
+\subsection{Unidad af\'in + no linealidad}
+
+\begin{itemize}
+  \item Unidad: $a = \phi(\mathbf{w}^\top \mathbf{x} + b)$. Capa: $\mathbf{h} = \phi(W\mathbf{x} + \mathbf{b})$.
+  \item \textbf{Sin $\phi$, apilar capas no agrega expresividad}: la composici\'on de afines es af\'in. La no linealidad rompe eso.
+  \item Activaciones comunes: ReLU, sigmoide ($\sigma$), tanh.
+  \item \textbf{Teorema de aproximaci\'on universal}: una red con una capa oculta y no linealidad no polinomial aproxima cualquier funci\'on continua sobre un compacto (Cybenko 1989, Hornik 1991). No dice cu\'antas neuronas ni si el entrenamiento las encuentra.
+\end{itemize}
+
+\subsection{Aprendizaje supervisado como optimizaci\'on}
+
+\begin{itemize}
+  \item Datos $(x_i, y_i)$, modelo $f_\theta$, p\'erdida $L(\theta) = \frac{1}{N}\sum_i \ell(f_\theta(x_i), y_i)$.
+  \item Entrenar = resolver $\min_\theta L(\theta)$ (en general no convexo).
+  \item \textbf{Funciones de p\'erdida}:
+    \begin{itemize}
+      \item Regresi\'on: MSE $\ell(\hat{y}, y) = \frac{1}{2}\|\hat{y} - y\|^2$ (modelo gaussiano).
+      \item Clasificaci\'on: entrop\'ia cruzada $\ell = -\sum_i y_i \log \hat{y}_i$ con $\hat{y} = \text{softmax}(z)$ (modelo categ\'orico).
+    \end{itemize}
+  \item Elegir una p\'erdida es, en el fondo, elegir un modelo probabilístico de los datos.
+\end{itemize}
+
+\subsection{Gradiente y descenso por gradiente}
+
+\begin{itemize}
+  \item $\nabla_\theta L \in \mathbb{R}^p$: vector de derivadas parciales, apunta a la direcci\'on de m\'aximo ascenso.
+  \item Regla de actualizaci\'on: $\theta \leftarrow \theta - \eta \nabla_\theta L(\theta)$.
+  \item $\eta$ grande $\to$ diverge; $\eta$ chico $\to$ converge lento.
+  \item \textbf{SGD}: gradiente estimado sobre un minibatch (insesgado).
+  \item \textbf{Momentum}: acumula inercia. \textbf{Adam}: momentum + escala adaptativa por coordenada. Optimizador por defecto en la pr\'actica.
+\end{itemize}
+
+\subsection{Backpropagation como diferenciaci\'on autom\'atica}
+
+\begin{itemize}
+  \item \textbf{Regla de la cadena}: $\frac{\partial z}{\partial x} = \frac{\partial z}{\partial y} \cdot \frac{\partial y}{\partial x}$.
+  \item Backprop = evaluar la cadena de la salida hacia la entrada, reutilizando resultados (producto de Jacobianos).
+  \item \textbf{Modo reverso}: 1 escalar de salida (la p\'erdida), $p$ par\'ametros $\Rightarrow$ gradiente completo en UNA pasada hacia atr\'as, costo $O(\text{forward})$. El modo directo costar\'ia $O(p)$.
+  \item \textbf{Grafo de c\'omputo}: nodos = valores intermedios; aristas = operaciones. Forward: evaluar en orden topol\'ogico. Backward: recorrer en orden inverso.
+\end{itemize}
+
+\subsection{Notebook: Motor de autograd (micrograd)}
+
+El laboratorio construye un motor de diferenciaci\'on autom\'atica en modo reverso en $\sim$100 l\'ineas de Python:
+
+\begin{enumerate}
+  \item \textbf{Value}: nodo del grafo. Guarda \texttt{data}, \texttt{grad} ($\partial L/\partial \text{self}$), \texttt{\_prev} (padres), \texttt{\_backward} (closure que propaga gradiente).
+  \item Operaciones (\texttt{\_\_add\_\_}, \texttt{\_\_mul\_\_}, \texttt{tanh}, \texttt{exp}): cada una crea un nodo, registra padres, y define su \texttt{\_backward} con la derivada local.
+  \item \textbf{backward()}: orden topol\'ogico + barrido inverso disparando cada \texttt{\_backward}.
+  \item \textbf{Gradient check}: verificar anal\'itico $\approx$ num\'erico con diferencias finitas centradas. Regla de oro: \emph{nunca conf\'ies en un gradiente sin verificarlo}.
+  \item \textbf{Neuron $\to$ Layer $\to$ MLP}: todo se apoya en Value. El loop de entrenamiento (forward $\to$ loss $\to$ zero\_grad $\to$ backward $\to$ update) es conceptualmente el mismo con que se entrena un LLM.
+\end{enumerate}
+
+\textbf{Punto clave}: los gradientes se \textbf{acumulan} (\texttt{+=}), no se reemplazan. Por eso \texttt{zero\_grad()} es imprescindible en cada paso.
+
+%=============================================================================
+\section{Attention is All You Need --- Transformers}
+%=============================================================================
+
+\subsection{El punto de partida}
+
+Paper: Vaswani et al., NeurIPS 2017. Introdujo el Transformer: arquitectura basada enteramente en atenci\'on, sin recurrencia ni convoluciones. Base de los modelos de lenguaje actuales.
+
+\subsection{Del texto a tokens}
+
+\begin{itemize}
+  \item Tres granularidades: car\'acter, subpalabra, palabra.
+  \item $V$ = tama\~no del vocabulario (fijo). $T$ = longitud de la secuencia (var\'ia por texto).
+  \item Trade-off: car\'acter = vocab chico pero secuencias largas; palabra = vocab enorme pero secuencias cortas. Subpalabra (BPE) busca el equilibrio.
+\end{itemize}
+
+\subsection{El bigrama: el modelo m\'as simple}
+
+\begin{itemize}
+  \item Predice el pr\'oximo car\'acter mirando \'unicamente el actual. Sin contexto, sin historia.
+  \item \texttt{token\_embedding\_table} = \texttt{nn.Embedding(V, V)}: la fila $i$ son los logits del pr\'oximo token dado el token $i$.
+  \item De logits a probabilidades: $\text{softmax}(\text{fila}_c)$.
+  \item Loss antes de entrenar: tabla random $\to$ predicciones picudas y equivocadas $\to$ loss $> \ln(V)$ (peor que el ``ignorante honesto'' uniforme).
+  \item Entrenar un bigrama = contar pares. El gradiente en la fila: $\text{grad} = p - \text{onehot}(\text{correcto})$.
+  \item \textbf{Techo}: no conoce el contexto. Solo codifica ``qu\'e caracteres suelen seguir a $c$'' promediado sobre todo el corpus.
+\end{itemize}
+
+\subsection{Promediar el pasado: darle memoria}
+
+\begin{itemize}
+  \item Representaci\'on de cada token = promedio de todos los tokens hasta \'el (bag of words del pasado). Ojo causal: solo hacia atr\'as.
+  \item Tres versiones equivalentes:
+    \begin{enumerate}
+      \item For-loop (correcto pero lento).
+      \item Matriz triangular normalizada: $\text{wei} = \text{tril}/\text{sum}$, \texttt{xbow = wei @ x}.
+      \item Softmax de afinidades: zeros $\to$ m\'ascara $-\infty$ $\to$ softmax $\to$ wei @ v.
+    \end{enumerate}
+  \item \textbf{El molde que no cambia}: (1) armar wei, (2) m\'ascara $-\infty$, (3) softmax por fila, (4) salida = wei @ v.
+  \item \textbf{Problema del promedio}: descarta el \textbf{orden} y la \textbf{relevancia} (todos pesan igual).
+\end{itemize}
+
+\subsection{Self-Attention}
+
+\begin{itemize}
+  \item Cambiamos UNA pieza del molde: wei pasa a calcularse a partir de los tokens (ya no son ceros).
+  \item Tres proyecciones lineales por token:
+    \begin{itemize}
+      \item \textbf{Query} $q = x \cdot W_Q$: ``qu\'e estoy buscando''.
+      \item \textbf{Key} $k = x \cdot W_K$: ``qu\'e ofrezco para ser encontrado''.
+      \item \textbf{Value} $v = x \cdot W_V$: ``qu\'e aporto si me eligen''.
+    \end{itemize}
+  \item Afinidad: $\text{wei}[i,j] = q_i \cdot k_j$ (producto interno).
+  \item F\'ormula de una cabeza:
+  \[
+    \text{Attention}(Q,K,V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}} + \text{m\'ascara}\right) \cdot V
+  \]
+  \item Escalado $1/\sqrt{d_k}$: control de varianza. Sin \'el, el softmax se satura y el gradiente se apaga.
+  \item \textbf{Positional encoding}: la atenci\'on es ciega al orden $\to$ entrada = embedding(token) + PE(pos).
+  \item ``Self'': Q, K, V salen de la misma secuencia. Si K, V vinieran de otra, ser\'ia cross-attention.
+\end{itemize}
+
+\subsection{Multi-Head Attention}
+
+\begin{itemize}
+  \item Una cabeza = un solo par $W_Q/W_K$ = una sola noci\'on de ``relevante''. Insuficiente: en lenguaje conviven varios tipos de relaci\'on (sintaxis, proximidad, correferencia).
+  \item Multi-head: $H$ cabezas independientes, cada una con sus propias $W_Q, W_K, W_V$, en subespacios de tama\~no $C/H$.
+  \item Concatenar + proyecci\'on $W_O$: mezcla los bloques. Entra $(B,T,C)$, sale $(B,T,C)$.
+  \item \textbf{Costo}: $H$ cabezas de $C/H$ tienen los mismos par\'ametros que 1 cabeza de $C$. Expresividad pr\'acticamente gratis.
+\end{itemize}
+
+\subsection{El bloque Transformer completo}
+
+\begin{itemize}
+  \item \textbf{FFN} (Feed-Forward Network): $\text{FFN}(x) = W_2 \cdot \phi(W_1 x + b_1) + b_2$. Cómputo por token (vertical), independiente por posici\'on. Dimensi\'on interna t\'ipica $4C$.
+  \item Atenci\'on \textbf{comunica} tokens; FFN \textbf{procesa} cada token.
+  \item \textbf{Conexiones residuales}: $x \leftarrow x + \text{Sublayer}(x)$. Camino directo para el gradiente $\to$ combate el desvanecimiento.
+  \item \textbf{LayerNorm}: normaliza cada vector (media 0, varianza 1) sobre sus $C$ componentes. Estabiliza activaciones.
+  \item Bloque completo:
+  \begin{align*}
+    x &\leftarrow x + \text{MultiHead}(\text{LN}(x)) \\
+    x &\leftarrow x + \text{FFN}(\text{LN}(x))
+  \end{align*}
+  \item Se apilan $N$ bloques. Capas bajas $\to$ estructura local; altas $\to$ relaciones abstractas. BERT: $N=12$, GPT-3: $N=96$.
+\end{itemize}
+
+\subsection{Encoder vs Decoder}
+
+\begin{center}
+\begin{tabular}{lll}
+  \textbf{Encoder-only} & \textbf{Decoder-only} & \textbf{Encoder-decoder} \\
+  BERT & GPT (lo que construimos) & T5, paper original \\
+  Comprensi\'on & Generaci\'on & Secuencia a secuencia \\
+\end{tabular}
+\end{center}
+
+\begin{itemize}
+  \item Encoder: atenci\'on bidireccional (sin m\'ascara). Decoder: atenci\'on causal (con m\'ascara).
+  \item Cross-attention: Q del decoder, K y V del encoder.
+  \item Se enmascara solo cuando ver un token ser\'ia hacer trampa respecto de lo que falta generar.
+\end{itemize}
+
+%=============================================================================
+\section{Detr\'as de la IA --- Tokenizers}
+%=============================================================================
+
+\subsection{Por qu\'e importa la tokenizaci\'on}
+
+La tokenizaci\'on est\'a en el origen de muchos comportamientos an\'omalos de los LLMs. La unidad m\'inima es el \textbf{token}, no el car\'acter.
+
+\textbf{Comportamientos que explica}:
+\begin{itemize}
+  \item \textbf{Deletreo}: no deletrea ni cuenta letras dentro de un token.
+  \item \textbf{Aritm\'etica}: n\'umeros segmentados de formas inconsistentes.
+  \item \textbf{Otros idiomas}: m\'as tokens por palabra fuera del ingl\'es $\to$ peor rendimiento y mayor costo.
+  \item \textbf{Espacios}: un espacio final puede alterar la tokenizaci\'on.
+  \item \textbf{Tokens raros} (SolidGoldMagikarp): token visto por el tokenizer pero casi no entrenado por el modelo $\to$ comportamiento err\'atico.
+  \item \textbf{Formato}: JSON vs YAML consume distinta cantidad de tokens.
+\end{itemize}
+
+\subsection{De texto a bytes}
+
+\begin{itemize}
+  \item \textbf{Unicode}: asigna a cada car\'acter un \textbf{code point} ($\sim$150.000 definidos).
+  \item Usar code points como vocabulario: $V \approx 150.000$, inestable, matrices enormes.
+  \item \textbf{UTF-8}: reescribe cada code point como 1 a 4 \textbf{bytes} (0--255). Alfabeto fijo de 256, universal, sin fuera-de-vocabulario.
+  \item ASCII: code point $\leq$ 127 $\to$ 1 byte (coincide con el n\'umero). Texto en ingl\'es usa menos bytes.
+  \item L\'imite del vocabulario de 256: $T$ crece demasiado. Costo de atenci\'on $O(T^2)$.
+\end{itemize}
+
+\subsection{Byte-Pair Encoding (BPE)}
+
+\begin{itemize}
+  \item Mecanismo: sobre los bytes, repetir: fusionar el par adyacente m\'as frecuente en un token nuevo.
+  \item Vocabulario inicial: 256 bytes (ids 0--255). Cada merge a\~nade un token: id 256, 257, \ldots
+  \item Tama\~no final: $V = 256 + \text{n\'umero de merges}$ (hiperpar\'ametro de dise\~no).
+  \item \textbf{El entrenamiento no tiene gradiente}: es puro conteo de frecuencias sobre un corpus.
+  \item Produce dos estructuras: \textbf{merges} (par $\to$ id nuevo, en orden) y \textbf{vocab} (id $\to$ bytes).
+\end{itemize}
+
+\subsection{Encode y Decode}
+
+\begin{itemize}
+  \item \textbf{train}: descubre las reglas (por frecuencia). Se ejecuta una vez, offline.
+  \item \textbf{encode(texto $\to$ ids)}: aplica los merges por \textbf{prioridad de merge} (orden en que se aprendieron), \textbf{no por frecuencia}. Texto $\to$ bytes $\to$ repetir: buscar el par presente cuyo merge se aprendi\'o primero $\to$ fusionar.
+  \item \textbf{decode(ids $\to$ texto)}: lookup en vocab. id $\to$ \texttt{vocab[id]} (bytes) $\to$ concatenar $\to$ decodificar UTF-8.
+  \item \textbf{Round-trip exacto}: \texttt{decode(encode(texto)) == texto} para todo texto.
+  \item Error com\'un: encode por frecuencia en vez de por prioridad de merge.
+\end{itemize}
+
+\subsection{Regex splitting (GPT-2/GPT-4)}
+
+\begin{itemize}
+  \item Sin restricciones, BPE fusiona a trav\'es de l\'imites de palabra (\texttt{perro.}, \texttt{perro!} como tokens distintos).
+  \item Soluci\'on: un patr\'on regex corta el texto en fragmentos (palabras, n\'umeros, puntuaci\'on, espacios) \textbf{antes} de BPE. Los merges nunca cruzan fragmentos.
+  \item GPT-4 vs GPT-2: contracciones case-insensitive, n\'umeros en grupos de 1--3 d\'igitos, mejor manejo de espacios.
+  \item Estos patrones se dise\~nan a mano, con sesgo hacia el ingl\'es.
+\end{itemize}
+
+\subsection{Tokens especiales}
+
+\begin{itemize}
+  \item Marcas de control fuera de BPE: \texttt{<|endoftext|>}, \texttt{<|im\_start|>}, \texttt{<|im\_end|>}, etc.
+  \item Se agregan a mano con un id reservado, por encima de los bytes y merges.
+  \item \texttt{encode} los separa antes de BPE. Riesgo de seguridad: hay que habilitarlos explícitamente (\texttt{allowed\_special}).
+  \item ChatML: \texttt{<|im\_start|>user} ... \texttt{<|im\_end|>} \texttt{<|im\_start|>assistant}.
+\end{itemize}
+
+\subsection{Tokenizers reales y algoritmos}
+
+\begin{center}
+\begin{tabular}{llll}
+  \textbf{Familia} & \textbf{Algoritmo} & \textbf{Librer\'ia} \\
+  \hline
+  GPT (2/3/4) & BPE byte-level & tiktoken \\
+  BERT & WordPiece & BERT / HF tokenizers \\
+  T5 & Unigram & SentencePiece \\
+  Llama 2 / Mistral & BPE (code points) & SentencePiece \\
+  Llama 3 & BPE byte-level & estilo tiktoken \\
+\end{tabular}
+\end{center}
+
+\begin{itemize}
+  \item \textbf{BPE}: bottom-up, fusiona pares m\'as frecuentes.
+  \item \textbf{WordPiece} (BERT): bottom-up, fusiona por m\'axima verosimilitud (no por frecuencia).
+  \item \textbf{Unigram}: top-down, arranca con vocabulario grande y \textbf{poda} lo que menos aporta. Usa EM para estimar probabilidades, Viterbi para segmentar.
+  \item \textbf{SentencePiece}: toolkit de Google. Corre BPE o Unigram sobre code points (no bytes). \texttt{byte\_fallback} para OOV.
+\end{itemize}
+
+\subsection{Notebook: Tokenizaci\'on}
+
+\textbf{Parte A --- Tokenizer m\'inimo desde cero}:
+\begin{itemize}
+  \item Implementaci\'on de \texttt{get\_stats} (contar pares) y \texttt{merge} (reemplazar par por id nuevo).
+  \item 3 merges sobre \texttt{"aaabdaaabac"} $\to$ \texttt{[258, 100, 258, 97, 99]}.
+  \item Sobre texto real: 20 merges $\to$ compresi\'on $\sim$1.57x.
+  \item Round-trip exacto verificado.
+  \item Regex splitting con patr\'on de GPT-2: cada categor\'ia (letras, n\'umeros, puntuaci\'on) queda separada.
+\end{itemize}
+
+\textbf{Parte B --- Tokenizers reales}:
+\begin{itemize}
+  \item tiktoken: \texttt{cl100k} (GPT-4) vs \texttt{o200k} (GPT-4o). Vocabularios crecientes (50k $\to$ 100k $\to$ 200k).
+  \item AutoTokenizer: GPT-2 (BPE, prefijo \texttt{\.G}), BERT (WordPiece, prefijo \texttt{\#\#}), T5 (Unigram, símbolo \texttt{\_}).
+  \item Rarezas en vivo: \texttt{strawberry} $\to$ \texttt{[st, raw, berry]}; n\'umeros partidos inconsistentemente; m\'as tokens para japon\'es que ingl\'es; JSON cuesta m\'as tokens que YAML.
+\end{itemize}
+
+\subsection{Notebook: ``\textquestiondown Qu\'e es realmente la IA?''}
+
+Notebook introductorio usando Qwen3 8B con Ollama. Puntos clave:
+
+\begin{itemize}
+  \item Un LLM \textbf{solo predice el pr\'oximo token}. Todo lo dem\'as (memoria, personalidad, herramientas, b\'usqueda) es \textbf{software alrededor} del predictor.
+  \item \textbf{raw=True}: apaga el chat template (el modelo recibe texto plano). \textbf{think=False}: apaga la cadena de razonamiento.
+  \item La ``conversaci\'on'' es una ilusi\'on: un \'unico string con tokens especiales (\texttt{<|im\_start|>}, \texttt{<|im\_end|>}).
+  \item \textbf{Temperatura}: controla el azar. $T=0$ $\to$ determin\'istico; $T=1$ $\to$ diverso.
+  \item \textbf{Memoria}: cada llamada arranca de cero. Soluci\'on: reenviar TODO el historial.
+  \item \textbf{Personalidad}: system prompt (texto al inicio del string).
+  \item \textbf{Herramientas}: el modelo no calcula. Soluci\'on naive: router por keyword. Soluci\'on real: function calling.
+  \item \textbf{Alucinaci\'on}: inventa con total seguridad cuando no sabe. Soluci\'on: RAG (inyectar contexto).
+  \item \textbf{Alineamiento}: SFT (fine-tuning supervisado) + RLHF/preferencias. Convierte un simulador de texto en un asistente. Efecto colateral: adulaci\'on (sycophancy).
+  \item Modelo base vs instruct: el base contin\'ua texto; el instruct responde a instrucciones.
+\end{itemize}
+
+%=============================================================================
+\section{Embeddings}
+%=============================================================================
+
+\subsection{Parte 1: Word Embeddings}
+
+\subsubsection{Los embeddings de un LLM se crean dentro del modelo}
+
+La tabla de embeddings (\texttt{nn.Embedding}) es un par\'ametro m\'as, entrenado end-to-end con la misma loss de predecir el pr\'oximo token. Los modelos que vemos en esta clase son para entender el mecanismo.
+
+\subsubsection{Similitud coseno}
+
+\[
+  \cos(\mathbf{a}, \mathbf{b}) = \frac{\mathbf{a} \cdot \mathbf{b}}{\|\mathbf{a}\| \|\mathbf{b}\|}
+\]
+
+\begin{itemize}
+  \item $\cos = 1$: misma direcci\'on (0\textdegree). $\cos = 0$: ortogonales (90\textdegree). $\cos = -1$: opuestos (180\textdegree).
+  \item Distancia coseno: $\text{dist} = 1 - \cos$ (m\'as chica = m\'as cerca).
+  \item Compara \textbf{direcci\'on, no tama\~no}. Un vector el doble de largo pero misma direcci\'on da $\cos = 1$.
+  \item Se usa coseno (no euclidiana) porque la magnitud correlaciona con frecuencia, y queremos factorizarla afuera.
+\end{itemize}
+
+\subsubsection{One-hot: identidad, cero significado}
+
+\begin{itemize}
+  \item Vector de $V$ ceros con un \'unico 1. Gigante, sparse.
+  \item $\cos(\text{gato}, \text{perro}) = 0 = \cos(\text{gato}, \text{avi\'on})$: todo ortogonal a todo.
+  \item \textbf{Identidad clave}: $\text{one\_hot}(i) \cdot C = C[i]$. Un embedding es leer una fila de una tabla.
+\end{itemize}
+
+\subsubsection{Hip\'otesis distribucional y conteo}
+
+\begin{itemize}
+  \item ``Una palabra se conoce por la compa\~n\'ia que mantiene'' (Firth, 1957).
+  \item \textbf{Matriz de co-ocurrencia}: $M[i,j]$ = veces que $j$ cae en la ventana de $i$.
+  \item Problema del conteo crudo: lo domina la frecuencia. Palabras comunes co-ocurren con todo.
+  \item \textbf{PPMI} (Positive Pointwise Mutual Information): $\text{PMI}(w,c) = \log\frac{P(w,c)}{P(w) \cdot P(c)}$, recortado a 0. Saca el efecto de frecuencia.
+  \item \textbf{SVD} para comprimir la matriz. Cada palabra pasa de $|$contextos$|$ dimensiones a $d$.
+  \item Emerge geometr\'ia (temas se agrupan), pero es ruidosa y no escala.
+\end{itemize}
+
+\subsubsection{Word2Vec: aprender prediciendo}
+
+\begin{itemize}
+  \item \textbf{Truco central}: inventar una tarea de predicci\'on descartable. La tarea es la excusa; los vectores son el premio.
+  \item \textbf{Skip-gram}: dada una palabra central, predecir sus vecinas dentro de una ventana. Self-supervised.
+  \item Score: $\text{score}(\text{centro}, \text{contexto}) = \mathbf{v}_{\text{centro}} \cdot \mathbf{u}_{\text{contexto}}$.
+  \item \textbf{Cuello de botella}: softmax sobre todo $V$ ($O(|V|)$ por par).
+  \item \textbf{Negative sampling}: de ``elegir entre $V$'' a ``\textquestiondown real o falso?''. $k+1$ problemas binarios con sigmoide. $O(k)$ en vez de $O(V)$.
+  \item Resultado: analog\'ias como aritm\'etica: $\text{rey} - \text{hombre} + \text{mujer} \approx \text{reina}$.
+  \item Descubrimiento (Levy \& Goldberg 2014): skip-gram con negative sampling factoriza impl\'icitamente una matriz de PMI.
+\end{itemize}
+
+\subsubsection{GloVe: contar y despu\'es aprender}
+
+\begin{itemize}
+  \item Combina lo mejor de contar (global, eficiente) y predecir (patrones ricos).
+  \item El objeto: el \textbf{cociente} $P(k|\text{ice})/P(k|\text{steam})$ discrimina; la probabilidad sola, no.
+  \item Modelo: $\mathbf{v}_i \cdot \mathbf{u}_k + b_i + b_k = \log X_{ik}$. Regresi\'on ponderada sobre la matriz de conteos.
+  \item \textbf{No es una red}: profundidad cero, sin no linealidad, sin softmax. Modelo bilineal.
+  \item Los tres (SVD+PPMI, skip-gram, GloVe) factorizan la misma matriz de asociaci\'on.
+  \item Las analog\'ias no son emergentes: son la restricci\'on de dise\~no.
+\end{itemize}
+
+\subsubsection{Techo: static embeddings y polisemia}
+
+Un vector fijo por palabra, ciego al contexto. ``Bank'' tiene dos sentidos pero un solo vector. La resoluci\'on: embeddings \textbf{contextuales} (self-attention / Transformer).
+
+\textbf{Arco completo}: one-hot (identidad) $\to$ static (significado, ciego al contexto) $\to$ contextual (Transformer).
+
+\subsubsection{Sesgos}
+
+Los embeddings heredan los sesgos del corpus. Ejemplo: $\text{man}:\text{doctor}::\text{woman}:\text{nurse}$. Medir y mitigar estos sesgos es parte de responsible AI.
+
+\subsection{Parte 2: Sentence Embeddings}
+
+\subsubsection{El problema}
+
+Las aplicaciones operan sobre \textbf{textos}, no palabras sueltas. Necesitamos un vector por oraci\'on, de largo fijo, que capture el significado completo.
+
+\subsubsection{Baseline: promediar word vectors}
+
+\begin{itemize}
+  \item $\text{emb}(\text{oraci\'on}) = \frac{1}{n}\sum_{i=1}^{n} \mathbf{v}_i$. Centro de masa sem\'antico.
+  \item Funciona sorprendentemente bien como piso. Pero tiene tres agujeros:
+    \begin{enumerate}
+      \item \textbf{Orden}: ``the dog bit the man'' y ``the man bit the dog'' $\to$ mismo vector ($\cos = 1$).
+      \item \textbf{Diluci\'on}: oraciones largas promedian mucho relleno.
+      \item \textbf{OOV}: palabras fuera de vocabulario se ignoran.
+    \end{enumerate}
+\end{itemize}
+
+\subsubsection{BERT: el encoder}
+
+\begin{itemize}
+  \item Encoder-only, bidireccional. Entrenado con masked language modeling.
+  \item Produce un vector contextual por token. No genera texto.
+  \item \textbf{BERT crudo no sirve para coseno}: nunca lo entrenaron para que cerca en significado $\Rightarrow$ cerca en coseno. Pooleado, rinde peor que promediar GloVe en STS.
+\end{itemize}
+
+\subsubsection{SBERT (Sentence-BERT)}
+
+\begin{itemize}
+  \item SBERT = BERT + pooling + entrenamiento \textbf{contrastivo}.
+  \item \textbf{Pooling}: de un vector por token a uno por oraci\'on. Mean pooling (m\'as com\'un) o token [CLS].
+  \item \textbf{Entrenamiento contrastivo} (siamés): el mismo encoder embebe dos oraciones; la loss acerca las parecidas y aleja las distintas. Optimiza la geometr\'ia del coseno.
+  \item Datos: pares etiquetados (par\'afrasis, duplicados, NLI). Negativos gratis: in-batch negatives.
+  \item Cierra los tres agujeros: self-attention lee el orden, pondera importancia, tokeniza en subwords (sin OOV).
+  \item Interfaz: \texttt{model.encode("una oración")} $\to$ un vector.
+\end{itemize}
+
+\subsubsection{Embedders basados en decoder (GPT)}
+
+\begin{itemize}
+  \item Misma receta: vectores contextuales $\to$ poolear $\to$ fine-tuning contrastivo.
+  \item Diferencia: se lee el \textbf{\'ultimo} token (el \'unico que vio toda la oraci\'on), no el [CLS].
+  \item No se empieza de cero: arranca del GPT pre-entrenado. El pre-entrenamiento pone el \textbf{conocimiento}; el contrastivo pone la \textbf{m\'etrica}.
+\end{itemize}
+
+\subsubsection{Tres ``embeddings'' distintos}
+
+\begin{enumerate}
+  \item \textbf{De entrada}: vector fijo por token del vocabulario (lookup).
+  \item \textbf{Contextual por token}: salida de las capas con atenci\'on.
+  \item \textbf{Del texto} (el de RAG): UN solo vector para toda la query/documento.
+\end{enumerate}
+
+\subsubsection{B\'usqueda sem\'antica = la ``R'' de RAG}
+
+\begin{itemize}
+  \item Query + documentos $\to$ coseno $\to$ top-$k$. Eso es la recuperaci\'on de RAG.
+  \item Match por \textbf{significado}, no por palabras. Una query puede no compartir palabras con el documento correcto y recuperarlo.
+  \item \textbf{Invariante cr\'itica}: query y documentos deben embeberse con el \textbf{mismo modelo}. El coseno solo tiene sentido dentro de un mismo espacio vectorial. Cambiar de embedder $\to$ re-indexar todo.
+  \item Sim\'etrico (comparar frases similares) vs asim\'etrico (query corta $\to$ pasaje largo).
+\end{itemize}
+
+\subsubsection{Los tres modelos de un RAG}
+
+\begin{enumerate}
+  \item \textbf{Embedder} que indexa la base y embebe la query (mismo modelo).
+  \item \textbf{LLM generador} que escribe la respuesta (recibe texto, no vectores).
+  \item Se comunican por texto, no por vectores.
+\end{enumerate}
+
+\subsubsection{Qu\'e embedder usar (2026)}
+
+\begin{itemize}
+  \item Benchmark: \textbf{MTEB}. Criterios: idioma, tama\~no/latencia, licencia.
+  \item APIs pagas: OpenAI, Cohere, Google (fuertes pero lock-in).
+  \item Open source competitivo: Qwen3-Embedding, BGE-M3 (multiling\"ue).
+  \item Livianos y locales: nomic-embed-text (137M, CPU), bge-m3.
+  \item Regla: benchmarkear en tus propios datos.
+\end{itemize}
+
+\subsubsection{Lo que falta para RAG en serio (Semana 8)}
+
+\begin{itemize}
+  \item \textbf{Chunking}: partir documentos largos en pedazos indexables.
+  \item \textbf{Vector store}: Chroma, pgvector, Qdrant (en vez de lista de numpy).
+  \item \textbf{Reranking}: segundo paso que afina el top-$k$.
+\end{itemize}
+
+\subsection{Notebook: Word Embeddings (N1)}
+
+Recorrido ejecutable completo:
+\begin{itemize}
+  \item \S1: Coseno con n\'umeros y plot (vectores 2D).
+  \item \S2: One-hot $\to$ lookup: \texttt{one\_hot @ C == C[i]} verificado con \texttt{torch.allclose}.
+  \item \S3: Co-ocurrencia + PPMI + SVD desde cero sobre Reuters. Heatmaps de la matriz. Emerge geometr\'ia por temas (petr\'oleo vs granos).
+  \item \S4: Word2Vec real con gensim sobre text8 ($\sim$17M palabras). Vecinos de ``king'' y analog\'ia $\text{king} - \text{man} + \text{woman} \approx \text{queen}$.
+  \item \S5: GloVe pre-entrenado (400k palabras). Analog\'ias limpias. Polisemia de ``bank'' (dominada por sentido financiero). Sesgos: $\text{doctor} - \text{man} + \text{woman} \approx \text{nurse}$.
+  \item \S7: Skip-gram + negative sampling desde cero en PyTorch. Producto punto $\to$ logsigmoid. Con 50k tokens los vecinos son ruidosos: la geometr\'ia necesita escala.
+\end{itemize}
+
+\subsection{Notebook: Sentence Embeddings (N2)}
+
+\begin{itemize}
+  \item \S2: Baseline promedio. $\cos(\text{king}, \text{monarch}) = 0.929$ (alto), $\cos(\text{king}, \text{pizza}) = 0.759$ (bajo). Agujero del orden: dog/man $\to \cos = 1.0$.
+  \item \S3: SBERT (\texttt{all-MiniLM-L6-v2} y multilingüe). Dog/man $\to \cos = 0.98$ (ya no idénticos).
+  \item \S4: Corpus de conceptos del curso. Heatmap de similitud: word2vec--negative sampling se iluminan juntos.
+  \item \S5: B\'usqueda sem\'antica a mano y con \texttt{util.semantic\_search}. Query sin palabras en com\'un recupera el documento correcto.
+  \item \S5: Invariante: \texttt{cos(qA, qB) = 0.236} con dos modelos distintos $\to$ espacios incompatibles.
+  \item \S6: RAG m\'inimo Ollama-nativo. Embedder: nomic-embed-text (768-dim). Generador: qwen3:8b. Sin RAG inventa fechas; con RAG responde desde la base.
+\end{itemize}
+
+%=============================================================================
+\newpage
+\section*{Lecturas recomendadas}
+\addcontentsline{toc}{section}{Lecturas recomendadas}
+
+\begin{description}
+  \item[Clase 1] Goodfellow, Bengio \& Courville, \emph{Deep Learning} (cap.\ 2, 4, 6.5). CS231n (Stanford). Repo micrograd (A.\ Karpathy).
+  \item[Clase 2] Vaswani et al.\ (2017), \emph{Attention Is All You Need}. Karpathy, nanoGPT. Brown et al.\ (2020), \emph{Language Models are Few-Shot Learners} (GPT-3).
+  \item[Clase 3] Sennrich et al.\ (2015), BPE en NLP. Radford et al.\ (2019), GPT-2 \S2.2. Video: Karpathy, \emph{Let's build the GPT Tokenizer}. Repo minbpe.
+  \item[Clase 4] Lena Voita, \emph{Word Embeddings}. CS224N (Stanford). Jay Alammar, \emph{The Illustrated Word2vec}. Reimers \& Gurevych (2019), \emph{Sentence-BERT}. Leaderboard MTEB.
+\end{description}
+
+\end{document}
