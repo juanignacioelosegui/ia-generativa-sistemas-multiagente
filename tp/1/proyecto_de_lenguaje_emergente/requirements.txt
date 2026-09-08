@@ -1,0 +1,55 @@
+# Dependencias del Laboratorio de Lenguaje Emergente.
+#
+# Esto son RESTRICCIONES, no un lockfile. En Colab, ejecutá `pip install -r requirements.txt`
+# al principio del notebook de cada etapa -- Colab ya provee una build de torch compatible con CUDA,
+# así que no reinstales torch ahí si la restricción de abajo ya está satisfecha.
+#
+# Notablemente ausentes, a propósito: `transformers`, `peft`, `bitsandbytes`, `trl`. Todos los modelos de
+# este repositorio (el Transformer de preentrenamiento, la continuación con SFT, los adaptadores LoRA opcionales)
+# están hechos a mano en PyTorch puro -- no hay ningún modelo de HuggingFace al que engancharle un adaptador
+# de librería, y cuantizar un modelo de <10M de parámetros no ahorra nada. Ver README.md.
+
+# =============================================================================
+# torch
+# =============================================================================
+# En WINDOWS la rueda de PyPI ya es solo CPU (~200 MB) -- suficiente para corridas
+# SMOKE_TEST en una laptop. En Colab, torch viene preinstalado con una build de CUDA
+# compatible; esta restricción es apenas un piso, así que pip debería dejarlo en paz.
+torch>=2.6
+
+# =============================================================================
+# tokenizador (Etapa 1) y carga de datasets (Etapa 0)
+# =============================================================================
+# Librería de bajo nivel de HF usada para entrenar un tokenizador BPE a nivel byte desde cero.
+# Deliberadamente NO `transformers` -- nunca cargamos un modelo de HF.
+tokenizers>=0.20
+
+# TinyStories / TinyStories-Instruct, traídos del Hub.
+datasets>=2.20
+
+# usada directamente por verify_setup.py para un chequeo liviano de metadatos del Hub.
+huggingface_hub>=0.25
+
+# El tokenizador real de GPT-2, para la comparación de conteo de tokens de la Etapa 1.
+tiktoken>=0.13
+
+# =============================================================================
+# embeddings (Etapa 3) y gráficos
+# =============================================================================
+scikit-learn>=1.5   # proyección PCA / t-SNE de la tabla de embeddings entrenada
+matplotlib           # curvas de pérdida, scatter plots de embeddings
+
+# =============================================================================
+# juez (Etapa 5, opcional)
+# =============================================================================
+# Cliente nativo de Ollama (no el compatible con OpenAI) -- habla con el servidor
+# local de Ollama levantado dentro de la VM de Colab.
+ollama>=0.4
+requests             # sondear localhost:11434 mientras el servidor de Ollama arranca
+
+# =============================================================================
+# utilidades
+# =============================================================================
+psutil       # RAM del proceso, usada por environment.py cuando no hay GPU para consultar
+ipykernel    # permite que VS Code / Jupyter ejecuten los archivos .ipynb generados
+ipywidgets   # barras de progreso de tqdm limpias dentro de los notebooks
