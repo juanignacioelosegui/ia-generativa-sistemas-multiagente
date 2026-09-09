@@ -537,6 +537,305 @@ Recorrido ejecutable completo:
 \end{itemize}
 
 %=============================================================================
+\section{Pretraining y Fine-tuning}
+%=============================================================================
+
+\subsection{Parte 1: Preentrenamiento --- De la web cruda al modelo base}
+
+\subsubsection{Tres etapas: masa, silueta, cara}
+
+\begin{itemize}
+  \item El preentrenamiento (unsupervised) construye una ``masa'' gigantesca de patrones. El SFT le da silueta. RLHF es la capa final que lo vuelve asistente.
+  \item Casi todo el c\'omputo y los datos se gastan en el preentrenamiento. El ajuste posterior es, en comparaci\'on, una capa fina.
+\end{itemize}
+
+\subsubsection{Los datos: curaci\'on emp\'irica}
+
+\textbf{Perplexity}:
+\begin{itemize}
+  \item $\text{PPL} = \exp\!\bigl(-\frac{1}{N}\sum_i \log P(w_i|\text{contexto})\bigr) = \exp(\text{cross-entropy})$.
+  \item Interpretaci\'on: n\'umero efectivo de opciones equiprobables entre las que el modelo elige en cada paso. PPL = 1 (perfecto), PPL = $|V|$ (in\'util).
+  \item \textbf{Limitaci\'on}: mide fluidez con un estilo de texto, no competencia real. No compara entre tokenizers.
+\end{itemize}
+
+\textbf{Ablations}:
+\begin{itemize}
+  \item Experimento controlado: cambiar un solo factor (filtro, fuente, dedup) y dejar todo lo dem\'as fijo.
+  \item Se eval\'ua con tareas con respuesta conocida (accuracy), no con perplexity.
+  \item Modelos chicos y baratos, confiando en que el ranking relativo se mantiene a escala.
+  \item \textbf{Regla}: cada decisi\'on de curaci\'on se gana con un experimento, no con intuici\'on.
+\end{itemize}
+
+\textbf{Pipeline de curaci\'on} (embudo de 8 pasos):
+\begin{enumerate}
+  \item \textbf{URL}: lista negra de dominios (porno, spam, malware).
+  \item \textbf{Extracci\'on de texto}: quitar HTML, men\'us, ads. Solo el art\'iculo.
+  \item \textbf{Idioma}: detector + ruteo por idioma. Upsampling de lenguas con poca data.
+  \item \textbf{Gopher}: heur\'isticas de calidad (textos cortos, exceso de s\'imbolos, repetici\'on).
+  \item \textbf{MinHash}: deduplicaci\'on de casi-copias. Deduplicar de m\'as puede ser contraproducente.
+  \item \textbf{Filtros C4}: sin puntuaci\'on, lorem ipsum, boilerplate.
+  \item \textbf{Filtros propios}: reglas ad-hoc para basura espec\'ifica del corpus.
+  \item \textbf{PII}: reemplazar emails, IPs, tel\'efonos por placeholders.
+\end{enumerate}
+
+Referencia abierta: FineWeb / FineWeb-2 (HuggingFace). Cada compa\~n\'ia tiene su ``libro de recetas'' cerrado, pero el esquema es com\'un.
+
+\textbf{Lecci\'on central}: calidad $>$ cantidad. Filtrar mejor rinde m\'as que agregar m\'as data cruda.
+
+\subsubsection{La escala: Scaling Laws}
+
+\begin{itemize}
+  \item Tres perillas atadas: $C \approx 6 \cdot N \cdot D$ (c\'omputo $\approx$ 6 $\times$ par\'ametros $\times$ tokens).
+  \item A $C$ fijo, $N$ y $D$ se compensan: m\'as par\'ametros $\Rightarrow$ menos tokens, y viceversa.
+  \item \textbf{Power law}: la loss baja de forma predecible (recta en log-log) al escalar $N$, $D$ o $C$, hasta una \emph{irreducible loss} (entrop\'ia intr\'inseca del lenguaje).
+  \item \textbf{Predicci\'on del run}: entrenar modelos chicos, fitear la curva, extrapolar. GPT-4 predijo su loss final desde runs 1000$\times$ m\'as chicos.
+  \item \textbf{Chinchilla} (DeepMind, 2022): para entrenamiento compute-\'optimo, $\sim$20 tokens por par\'ametro. Chinchilla (70B, 1.4T tokens) le gan\'o a Gopher (280B, 300B tokens) con el mismo c\'omputo.
+  \item \textbf{Giro moderno}: sobre-entrenar por inferencia. Llama 3 8B: $\sim$1900 tokens/par\'ametro. Modelo chico, caro una vez, barato de servir.
+\end{itemize}
+
+\subsubsection{El modelo base}
+
+\begin{itemize}
+  \item Producto del pretraining: un ``simulador de documentos de internet''. Competencia amplia, comportamiento crudo.
+  \item \textbf{No se comporta como asistente}: ante ``\textquestiondown Cu\'al es la capital de Francia?'' puede continuar con m\'as preguntas (completa el patr\'on en vez de responder).
+  \item El conocimiento ya est\'a adentro: con few-shot, el base responde bien. La capacidad estaba; falta activarla.
+  \item \textbf{Competencia} (lo que sabe) vs \textbf{comportamiento} (c\'omo se presenta): dos cosas distintas. Pretraining compra competencia (caro, una vez). Comportamiento es una capa final barata.
+\end{itemize}
+
+\subsubsection{Continued pretraining vs fine-tuning}
+
+\begin{center}
+\begin{tabular}{lll}
+  & \textbf{Continued PT} & \textbf{Fine-tuning} \\
+  \hline
+  Para qu\'e & Conocimiento (dominio/idioma) & Comportamiento (responder, formato) \\
+  Objetivo & Next-token (self-supervised) & Pares supervisados \\
+  Datos & Texto plano, mucho & Pares, poco \\
+  Costo & US\$ cientos de miles & Chico \\
+\end{tabular}
+\end{center}
+
+\textbf{Regla}: conocimiento nuevo $\to$ continu\'a pre-entrenando; comportamiento nuevo $\to$ fine-tuning. No met\'es un dominio entero con un dataset chico de instrucciones.
+
+Ejemplo: modelo base + continued pretraining sobre corpus coreano ($\sim$200B tokens, $\sim$US\$0.2M) = modelo coreano. Mezclar coreano + ingl\'es para evitar catastrophic forgetting.
+
+\subsection{Parte 2: Fine-tuning eficiente}
+
+\subsubsection{Instruction tuning (SFT)}
+
+\begin{itemize}
+  \item Entrenar sobre pares (instrucci\'on $\to$ respuesta ideal): \textbf{demostraciones} de buen comportamiento.
+  \item Generaliza porque la variedad de tareas (resumir, traducir, explicar, clasificar) ense\~na la \textbf{habilidad general} de seguir instrucciones, no un cat\'alogo de respuestas.
+  \item \textbf{LIMA} (Less Is More for Alignment): mil ejemplos buenos y variados le ganan a un set enorme y ruidoso. Calidad $>$ cantidad.
+  \item \textbf{Masking del prompt}: la loss se calcula solo sobre los tokens de la respuesta. La instrucci\'on condiciona; la respuesta ense\~na.
+  \item \textbf{Chat template}: serializa roles (system/user/assistant) con tokens especiales (ChatML: \texttt{<|im\_start|>}, \texttt{<|im\_end|>}). Mismo template en entrenamiento e inferencia.
+  \item SFT full fine-tuning + reward model + PPO = pipeline est\'andar de la industria (InstructGPT, 2022).
+\end{itemize}
+
+\subsubsection{PEFT: Parameter-Efficient Fine-Tuning}
+
+\begin{itemize}
+  \item Full fine-tuning mueve todos los pesos. A escala real, no entra en una GPU: $\sim$16 bytes/par\'ametro (pesos + gradiente + estados de Adam). Un 7B $\to$ $\sim$112 GB.
+  \item PEFT congela el base y entrena $<1\%$ de par\'ametros. El conocimiento ya est\'a; para cambiar comportamiento alcanza un ajuste chico.
+  \item Tres estrategias:
+    \begin{itemize}
+      \item \textbf{Adapters}: capas chicas intercaladas en el Transformer (cuello de botella $d \to r \to d$). Suman latencia.
+      \item \textbf{Soft prompts / Prefix tuning}: vectores aprendidos en la entrada (o en todas las capas de atenci\'on). Gastan contexto.
+      \item \textbf{LoRA}: ajuste de bajo rango sobre las matrices existentes. Se fusiona $\to$ cero overhead en inferencia.
+    \end{itemize}
+\end{itemize}
+
+\subsubsection{LoRA (Low-Rank Adaptation)}
+
+\begin{itemize}
+  \item Hallazgo emp\'irico: el $\Delta W$ del fine-tuning tiene \textbf{rango bajo}.
+  \item En vez de aprender $\Delta W \in \mathbb{R}^{d \times d}$, aprender $B \cdot A$ con $A \in \mathbb{R}^{r \times d}$, $B \in \mathbb{R}^{d \times r}$, $r \ll d$.
+  \item Forward: $h = W x + \frac{\alpha}{r} B A x$. $W$ congelado, solo $A$ y $B$ entrenables.
+  \item Inicializaci\'on: $A$ al azar, $B$ en ceros $\Rightarrow$ $\Delta W = 0$ al inicio (modelo arranca id\'entico al base).
+  \item \textbf{La cuenta}: una capa $4096 \times 4096$ = 16.7M par\'ametros. Con LoRA $r=8$: $2 \times 8 \times 4096 = 65.5$K $\approx 0.4\%$.
+  \item Hiperpar\'ametros: $r$ (8--16), $\alpha$ (16--32), target modules (q, k, v, o de atenci\'on).
+  \item Beneficios: memoria m\'inima para entrenar + adapters livianos ($\sim$MB) e intercambiables.
+\end{itemize}
+
+\subsubsection{QLoRA}
+
+\begin{itemize}
+  \item LoRA resolvi\'o lo entrenable, pero el base congelado sigue ocupando memoria ($\sim$14 GB en fp16 para un 7B).
+  \item QLoRA = LoRA + base cuantizado a \textbf{4 bits}. Almacenamiento a 4 bits, c\'omputo de-cuantizado al vuelo a 16 bits.
+  \item \textbf{NF4} (4-bit NormalFloat): 16 niveles en los cuantiles de una normal. M\'as valores donde hay m\'as pesos $\to$ menos error de redondeo.
+  \item \textbf{Double quantization}: cuantiza tambi\'en las constantes de escala.
+  \item \textbf{Paged optimizers}: ante picos de memoria, descarga estados del optimizador a CPU RAM.
+  \item Resultado: fine-tuning de un 65B en una sola GPU de 48 GB. Un 7B entra en una T4 de 16 GB (Colab gratis).
+  \item Casi sin costo de calidad: 4-bit $\approx$ 16-bit en pr\'actica.
+\end{itemize}
+
+\subsubsection{S\'intesis}
+
+\begin{itemize}
+  \item \textbf{Una sola loss} (next-token) de punta a punta: preentrenamiento $\to$ SFT $\to$ LoRA $\to$ QLoRA.
+  \item Los datos cambiaron una vez: de texto crudo a demostraciones instrucci\'on $\to$ respuesta.
+  \item En cada escal\'on se mueven menos pesos: full FT (100\%) $\to$ LoRA ($<1\%$) $\to$ QLoRA ($<1\%$ + base 4-bit).
+  \item \textbf{Techo del SFT}: clona demostraciones, llega tan lejos como sus ejemplos. No captura preferencias. Siguiente paso: RLHF / DPO.
+\end{itemize}
+
+\subsection{Notebook: Fine-tuning eficiente}
+
+Arco completo sobre SmolLM2-1.7B (base) con T4 gratis:
+
+\begin{enumerate}
+  \item \textbf{Cargar base en 4-bit}: \texttt{BitsAndBytesConfig} con NF4 + double quant. 1.71B pesos, $\sim$1.0 GB (vs 3.42 GB en fp16).
+  \item \textbf{Base no se comporta}: ante ``Explain photosynthesis'' genera m\'as preguntas en loop; ante ``Capital of France'' responde pero no frena.
+  \item \textbf{Chat template}: ChatML (\texttt{<|im\_start|>}/\texttt{<|im\_end|>}) definido manualmente (el base no lo trae, pero los tokens ya existen en el vocabulario).
+  \item \textbf{Datos}: Dolly 15k, subset de 1000. 8 categor\'ias (open\_qa, classification, summarization\ldots). Formateados con chat template.
+  \item \textbf{LoRA a mano}: \texttt{LoRALayer} (18 l\'ineas): $A$ al azar, $B$ en ceros. \texttt{LinearWithLoRA}: $Wx + (\alpha/r) BAx$. Verificaci\'on: salida id\'entica al inicio ($\Delta W = 0$).
+  \item \textbf{Con \texttt{peft}}: \texttt{LoraConfig(r=8, alpha=16, targets=[q,k,v,o])}. Trainable: 3.1M / 1.71B = \textbf{0.18\%}. Adapters en fp32, base en 4-bit.
+  \item \textbf{Entrenar}: 200 pasos con \texttt{SFTTrainer}, LR $2 \times 10^{-4}$. Loss baja de $\sim$3.5 a $\sim$2.3.
+  \item \textbf{Antes/despu\'es}: ahora responde (``Paris'') y frena. Bugs cr\'iticos: \texttt{model.eval()} (apagar dropout de LoRA) y \texttt{eos\_token\_id} (frenar en \texttt{<|im\_end|>}).
+  \item \textbf{Adapter guardado}: 6.1 MB (vs 3.42 GB del modelo completo).
+\end{enumerate}
+
+%=============================================================================
+\section{Alineamiento y Evaluaci\'on}
+%=============================================================================
+
+\subsection{Parte 1: Alineamiento}
+
+\subsubsection{La analog\'ia de Karpathy}
+
+Tres formas de estudiar un libro = tres etapas de entrenamiento:
+\begin{enumerate}
+  \item \textbf{Pretraining} = exposici\'on, conocimiento de fondo.
+  \item \textbf{SFT} = problemas resueltos, imitaci\'on.
+  \item \textbf{RL} = problemas de pr\'actica, probar y corregir.
+\end{enumerate}
+
+\subsubsection{Dominios verificables: el loop de RL}
+
+\begin{itemize}
+  \item Donde hay respuesta conocida (matem\'atica, c\'odigo), el modelo genera muchas soluciones, un \textbf{verificador} filtra las correctas, y se refuerzan.
+  \item Una estrategia confiable (llega m\'as seguido a la respuesta) se refuerza m\'as, sin que nadie la etiquete.
+  \item \textbf{El razonamiento emerge}: al optimizar por acertar, las respuestas se alargan solas (el modelo descubre que ``pensar en voz alta'' ayuda). Es lo que produce R1, o1, Qwen3 think.
+  \item \textbf{Formato \texttt{<think>}}: el contenido del razonamiento emerge del RL; el tag \texttt{<think>} se impone (template o cold-start SFT).
+  \item RL supera al que imita: como solo importa llegar a la respuesta, el modelo encuentra caminos que ning\'un humano usar\'ia (AlphaGo, ``movimiento 37'').
+\end{itemize}
+
+\subsubsection{Dominios no verificables: preferencias}
+
+\begin{itemize}
+  \item ``Un chiste sobre pel\'icanos'', ``resum\'i bien esto'': no hay respuesta correcta contra qu\'e chequear.
+  \item \textbf{Comparar, no puntuar}: mostrar al humano varias respuestas y pedir que las ordene. Ordenar es m\'as f\'acil que puntuar. La unidad m\'inima es un par (chosen, rejected).
+\end{itemize}
+
+\subsubsection{Reward Model}
+
+\begin{itemize}
+  \item Un juez aprendido que reemplaza al verificador. Recibe (prompt, respuesta) y devuelve $r \in \mathbb{R}$.
+  \item Nace de un GPT con la cabeza cambiada: mismas capas de Transformer, distinta cabeza (escalar en vez de distribuci\'on sobre vocabulario).
+  \item Se entrena con Bradley-Terry: $\min -\log \sigma(r(\text{chosen}) - r(\text{rejected}))$.
+  \item Un ranking de $K$ respuestas se desarma en $\binom{K}{2}$ pares.
+\end{itemize}
+
+\subsubsection{RLHF}
+
+\begin{itemize}
+  \item ``Pol\'itica'' = el LLM que entren\'as. La pol\'itica genera, el reward model punt\'ua, se empuja hacia puntajes altos.
+  \item \textbf{Reward hacking}: el RL encuentra agujeros del reward model (entradas sin sentido con puntaje alt\'isimo, e.g.\ ``the the the'' $\to$ 1.0).
+  \item \textbf{Freno KL}: $\max \mathbb{E}[r(y)] - \beta \cdot \text{KL}(\pi \| \pi_{\text{ref}})$. Se congela una copia del SFT como ancla. $\beta$ = largo de la correa.
+  \item RLHF es un ajuste fino acotado: se corta a los pocos cientos de pasos (el reward es hackeable). Pipeline caro: hasta 4 modelos simult\'aneos.
+\end{itemize}
+
+\subsubsection{DPO (Direct Preference Optimization)}
+
+\begin{itemize}
+  \item Mismo objetivo que RLHF (subir lo preferido sin despegarse del SFT), pero \textbf{sin reward model} y \textbf{sin PPO}: una sola loss sobre los pares.
+  \item Explota que el juez y el generador son el mismo Transformer con distinta cabeza $\to$ colapsa las dos redes en una.
+  \item PPO y DPO est\'an al mismo nivel: dos caminos desde los mismos pares.
+\end{itemize}
+
+\subsubsection{Constitutional AI (RLAIF)}
+
+\begin{itemize}
+  \item Reemplaza al humano por principios en lenguaje natural (``constituci\'on'') + un modelo que juzga.
+  \item \textbf{Fase 1}: criticar y revisar. El modelo genera, se critica contra un principio, y reescribe mejor $\to$ dataset para SFT.
+  \item \textbf{Fase 2}: preferencias por IA. Un modelo compara dos respuestas seg\'un la constituci\'on $\to$ pares (chosen, rejected) sin humano.
+  \item El humano subi\'o un nivel: de etiquetar casos a escribir principios. Es la receta de Anthropic (Claude).
+  \item Misma trampa: el juez-IA es hackeable.
+\end{itemize}
+
+\subsubsection{S\'intesis del alineamiento}
+
+\begin{center}
+\begin{tabular}{ll}
+  \textbf{\textquestiondown Qui\'en punt\'ua?} & \textbf{Consecuencia} \\
+  \hline
+  Verificador (objetivo) & Corre indefinido, razonamiento emerge, supera humanos \\
+  Reward model (proxy) & Hackeable, correa KL, techo acotado \\
+\end{tabular}
+\end{center}
+
+\subsection{Parte 2: Evaluaci\'on}
+
+\subsubsection{Benchmarks}
+
+\begin{itemize}
+  \item Bater\'ia fija de tareas con respuesta conocida $\to$ un n\'umero comparable. MMLU, HellaSwag, GSM8K, HumanEval.
+  \item \textbf{Mecanismo}: no es generaci\'on; se rankean log-probs de las opciones. Mide reconocimiento, no producci\'on.
+  \item \textbf{Saturaci\'on}: los modelos de frontera superan el benchmark $\to$ la comunidad responde con sucesores m\'as dif\'iciles (MMLU $\to$ MMLU-Pro $\to$ GPQA Diamond $\to$ HLE).
+  \item \textbf{Contaminaci\'on}: benchmarks online pueden haber entrado en los datos de entrenamiento. \textquestiondown Razon\'o o record\'o?
+  \item Miden capacidad, no preferencia. 90 en MMLU e insufrible de usar.
+\end{itemize}
+
+\subsubsection{Evaluaci\'on por preferencia}
+
+\begin{itemize}
+  \item El mismo par (chosen/rejected) que entren\'o al modelo, ahora como instrumento de medici\'on.
+  \item \textbf{LLM-as-a-judge}: un modelo fuerte elige entre dos respuestas. Coincide con humanos $\sim$80\%.
+  \item Sesgos del juez: posici\'on (prefiere A o B seg\'un orden), \textbf{verbosidad} (premia la m\'as larga), auto-preferencia (favorece su propio estilo).
+  \item \textbf{Chatbot Arena}: batallas ciegas entre modelos, votadas por humanos, ranking Elo.
+  \item \textbf{Unificaci\'on}: Elo = Bradley-Terry = la misma $\sigma(\text{rating}_A - \text{rating}_B)$ que entrena el reward model y que usa DPO.
+\end{itemize}
+
+\subsubsection{Modos de falla}
+
+\textbf{Hallucinations}:
+\begin{itemize}
+  \item El modelo produce afirmaciones falsas con confianza. No es bug: el pretraining premia fluidez, no verdad. RLHF puede empeorar la calibraci\'on (sycophancy).
+  \item \textbf{Detecci\'on}: SelfCheckGPT --- muestrear $N$ veces, medir desacuerdo. Un hecho conocido coincide; una invenci\'on diverge.
+  \item \textbf{Mitigaci\'on}: entrenar el ``no s\'e'', tool use / web search, RAG.
+\end{itemize}
+
+\textbf{Sesgos}:
+\begin{itemize}
+  \item Cambiar un \'unico t\'ermino (nombre, g\'enero, nacionalidad) y medir si la respuesta cambia sistem\'aticamente.
+  \item A escala: StereoSet (estereotipos), ToxiGen (toxicidad impl\'icita).
+\end{itemize}
+
+\textbf{Goodhart / Reward hacking}:
+\begin{itemize}
+  \item ``Cuando una medida se convierte en objetivo, deja de ser una buena medida.''
+  \item Es exactamente el reward hacking del entrenamiento, ahora en evaluaci\'on. Ejemplo: optimizar para el juez LLM = hacer respuestas m\'as largas. Win-rate sube, calidad real no.
+  \item La \'unica evaluaci\'on que Goodhart no rompe: la verificable (donde hay verdad chequeable).
+\end{itemize}
+
+\subsubsection{Responsible AI}
+
+\begin{itemize}
+  \item Taxonom\'ia de Weidinger et al.\ (2022): 21 riesgos en 6 \'areas (discriminaci\'on/hate speech, information hazards, misinformation, usos maliciosos, da\~nos de la interacci\'on, ambientales/socioecon\'omicos).
+  \item Seis elementos: fairness, inclusiveness, reliability \& safety, privacy \& security, transparency, accountability.
+  \item \textbf{Guardrail}: un segundo pase que pregunta ``\textquestiondown esto es seguro?'' antes de devolver la respuesta. Es Constitutional AI en inferencia.
+  \item La misma constituci\'on que en entrenamiento defin\'ia ``qu\'e es bueno'' reaparece como guardrail que define ``qu\'e es seguro mostrar''.
+\end{itemize}
+
+\subsubsection{S\'intesis de evaluaci\'on}
+
+\begin{itemize}
+  \item Un solo objeto ---la comparaci\'on de preferencias--- entren\'o al modelo y lo mide. Alineamiento y evaluaci\'on son dos caras de ``comparar respuestas''.
+  \item El mismo riesgo aparece en ambos: reward hacking = Goodhart.
+  \item Tensi\'on de frontera: a medida que los modelos superan la capacidad humana de juzgar (scalable oversight), evaluar se vuelve el problema dif\'icil.
+  \item \textbf{Puente a lo que sigue}: el modelo alineado y evaluado tiene una debilidad pr\'actica: inventa. La soluci\'on: RAG (darle una fuente).
+\end{itemize}
+
+%=============================================================================
 \newpage
 \section*{Lecturas recomendadas}
 \addcontentsline{toc}{section}{Lecturas recomendadas}
@@ -546,6 +845,8 @@ Recorrido ejecutable completo:
   \item[Clase 2] Vaswani et al.\ (2017), \emph{Attention Is All You Need}. Karpathy, nanoGPT. Brown et al.\ (2020), \emph{Language Models are Few-Shot Learners} (GPT-3).
   \item[Clase 3] Sennrich et al.\ (2015), BPE en NLP. Radford et al.\ (2019), GPT-2 \S2.2. Video: Karpathy, \emph{Let's build the GPT Tokenizer}. Repo minbpe.
   \item[Clase 4] Lena Voita, \emph{Word Embeddings}. CS224N (Stanford). Jay Alammar, \emph{The Illustrated Word2vec}. Reimers \& Gurevych (2019), \emph{Sentence-BERT}. Leaderboard MTEB.
+  \item[Clase 5] Hu et al.\ (2021), \emph{LoRA}. Dettmers et al.\ (2023), \emph{QLoRA}. Zhou et al.\ (2023), \emph{LIMA}. Ouyang et al.\ (2022), \emph{InstructGPT}. FineWeb (HuggingFace). Chinchilla (Hoffmann et al., 2022).
+  \item[Clase 6] Karpathy, \emph{Deep Dive into LLMs}. Ouyang et al.\ (2022), InstructGPT. Rafailov et al.\ (2023), DPO. DeepSeek-R1 (2025). Bai et al.\ (2022), Constitutional AI. Zheng et al.\ (2023), LLM-as-a-Judge. Weidinger et al.\ (2022), taxonom\'ia de riesgos.
 \end{description}
 
 \end{document}
