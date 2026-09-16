@@ -60,6 +60,9 @@ Ejecutá los archivos de cada etapa desde la raíz del repositorio — leen y es
 | [assignment.md](assignment.md) | **La consigna.** |
 | `00_dataset.py` | Sección 0 — descargar TinyStories, inspeccionarlo, argumentar por qué un vocabulario acotado es un instrumento de laboratorio. |
 | `data.py` | Cargadores de datasets compartidos — incluye un parser hecho desde cero para el formato de una-línea-por-fila de `TinyStories-Instruct`. |
+| `lab.py` | Transformer, checkpoints, batches, loop de entrenamiento y generación, compartidos por las Etapas 2–5. **En Colab no viene en el clon de la cátedra:** subanlo a mano o apunten `REPO_URL` a un repositorio propio. |
+| `01_tokenizer.py` … `05_judge.py` | Etapas 1–5 (fuente `.py`; los `.ipynb` se regeneran con `tools/py_to_notebook.py`). |
+| `INFORME.md` | Plantilla del informe y del registro de decisiones. |
 | `environment.py` | Cableado del entorno local: caché de HF dentro del repositorio, bundle de certificados para proxy corporativo, detección del dispositivo. |
 | `tools/py_to_notebook.py` | Regenera el `.ipynb` de cada etapa a partir de su fuente `.py`. |
 | `tools/ca_bundle_windows.py` | Corrige la falla de TLS de `huggingface_hub` detrás de un proxy corporativo que inspecciona TLS. |
