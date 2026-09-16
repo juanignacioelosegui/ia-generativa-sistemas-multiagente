@@ -1,2 +1,6 @@
 .planning/
 learn-cc/
+
+# checkpoints de modelos (pesados)
+checkpoints/
+*.pt
