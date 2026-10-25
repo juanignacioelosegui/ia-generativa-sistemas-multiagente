@@ -1,2 +1,5 @@
 .planning/
 learn-cc/
+
+# el repo del TP2 es su propio repositorio (fork privado del grupo), no un subdirectorio de este
+tp/2/projecto_rag/
